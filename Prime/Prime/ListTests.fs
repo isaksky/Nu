@@ -61,7 +61,7 @@ module ListTests =
             | ListAction.SetNthToNth(n1, n2) ->
                 let len = list.Count
                 if len > 0 then
-                    let idx1, idx2 = Math.Abs(n1) % len, Math.Abs(n2) % len
+                    let idx1, idx2 = n1 % len, n2 % len
                     let newlist = 
                         let v2 = Seq.item idx2 list
                         cloneSet idx1 v2 list
@@ -104,14 +104,27 @@ module ListTests =
 
     open FsCheck
 
-    let getActionGen pred =
-        Gen.filter pred Arb.generate<ListAction<int>>
+    let getActionGen (pred: ListAction<int> -> bool) =
+        Gen.map3 (fun i (PositiveInt j) (PositiveInt k) ->
+            match i with
+            | 0 -> ListAction.AddLast i 
+            | 1 -> ListAction.FilterWithFn
+            | 2 -> ListAction.FoldAddingLast
+            | 3 -> ListAction.MapIncrementFn
+            | 4 -> ListAction.SetNthToNth(j, k)
+            | _ -> failwithumf())
+            (Gen.choose(0, 4))
+            (Arb.toGen ^ Arb.Default.PositiveInt())
+            (Arb.toGen ^ Arb.Default.PositiveInt())
+        |> Gen.filter pred
         |> Gen.arrayOf
         |> Arb.fromGen
 
+    let getAllActionGen() = getActionGen (fun _ -> true)
+
     [<Property>]
     /// Proof of concept, we can delete this after we know test is correct
-    let aryEqListsLookingBackwards (initialList : ResizeArray<int>) (actions : ListAction<int> []) =
+    let aryEqListsLookingBackwards (initialList : ResizeArray<int>) =
         let ary = Array.ofSeq initialList
         let eq (ary: int[]) (fslist: int ResizeArray) = List.ofSeq ary = List.ofSeq fslist
         let pred i = i % 2 = 0
@@ -129,22 +142,23 @@ module ListTests =
             ary2.[i] <- v
             ary2
 
-        eqListsAfterSteps initialList ary actions add get set ((+) 1) Array.map pred Array.filter eq (fun () -> 0) Array.fold (+) true
+        Prop.forAll (getAllActionGen()) ^ fun actions ->
+            eqListsAfterSteps initialList ary actions add get set ((+) 1) Array.map pred Array.filter eq (fun () -> 0) Array.fold (+) true
 
     let ulistEqLists (initialList : ResizeArray<int>) (actions : ListAction<int>[]) (lookBackwards : bool) =
         let testList = Ulist.addMany initialList (Ulist.makeEmpty(None))
         let eq (ulist : Ulist<_>) (fslist : _ ResizeArray) = List.ofSeq ulist = List.ofSeq fslist
         let pred i = i % 2 = 0
-        eqListsAfterSteps initialList testList actions Ulist.add Ulist.get Ulist.set ((+) 1) Ulist.map pred Ulist.filter eq (fun () -> 0) Ulist.fold (+) lookBackwards 
+        eqListsAfterSteps initialList testList actions Ulist.add Ulist.get Ulist.set ((+) 1) Ulist.map pred Ulist.filter eq (fun () -> 0) Ulist.fold (+) lookBackwards
 
     [<Property>]
-    let ulistEqList (initialList : ResizeArray<int>) (actions : ListAction<int>[]) =
-        ulistEqLists initialList actions false 
+    let ulistEqList (initialList : ResizeArray<int>) =
+        Prop.forAll (getAllActionGen()) ^ fun actions ->
+            ulistEqLists initialList actions false 
 
     [<Property>]
     let ulistEqListsLookingBackwards (initialList : ResizeArray<int>) =
-        let actionGen = getActionGen (fun _ -> true)
-        Prop.forAll actionGen (fun actions ->
+        Prop.forAll (getAllActionGen()) ^ (fun actions ->
             ulistEqLists initialList actions true)
 
     [<Property>]
