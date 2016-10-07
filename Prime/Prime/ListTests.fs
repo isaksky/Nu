@@ -3,9 +3,81 @@
 
 namespace Prime.Tests
 open System
+open Xunit
+open FsCheck
 open FsCheck.Xunit
 open Prime
+open System.Collections.Generic
 open System.Diagnostics
+
+module ResizeCloneOps = 
+    let cloneAdd v (vs : List<_>) =
+        seq {
+            for x in vs do yield x
+            yield v
+        } |> List
+
+    let cloneMap f (vs : List<'v>) : ResizeArray<'v> = Seq.map f vs |> ResizeArray
+
+    let cloneFilter f (vs : List<_>) = Seq.filter f vs |> ResizeArray
+
+    let cloneSet (idx : int) (v : 'v) (vs : List<_>) =
+        let vs2 = List(vs.Capacity)
+        vs2.AddRange(vs)
+        vs2.[idx] <- v
+        vs2
+
+    let ofSeq xs =
+        let ys = List()
+        for x in xs do ys.Add(x)
+        ys 
+
+module ListCommands =
+    let private eq testlist (list:List<_>) = 
+        Seq.length testlist = list.Count &&
+        Seq.forall2 (=) testlist list
+    let private (==) (testlists: Ulist<int> list) (lists : List<int> list) =
+        Seq.length testlists = List.length lists &&
+        List.forall2 eq testlists lists
+        
+    let displayLists (testlists: Ulist<int> list) (lists : List<int> list) =
+        let plists lists =
+            let sb = Text.StringBuilder("[")
+            for list in lists do
+                sb.Append " [" |> ignore
+                for i in list do
+                    sb.Append(i.ToString()) |> ignore
+                    sb.Append(' ') |> ignore
+                sb.Append "] " |> ignore
+            sb.Append(']') |> ignore
+            sb.ToString()
+        sprintf "Expected %s\nActual %s" (plists testlists) (plists lists)
+
+    let mkCmd name applyToTest applyToModel =
+        { new Command<Ulist<int> list, List<int> list>() with
+            override __.RunActual testlists =
+                match testlists with
+                | h::tl -> (applyToTest h)::h::tl
+                | _ -> failwithumf()
+            override __.RunModel m =
+                match m with
+                | h::tl -> (applyToModel h)::h::tl
+                | _ -> failwithumf() 
+            override __.Post(testlists, lists) =
+                testlists == lists |@ displayLists testlists lists
+            override __.ToString() = name }
+
+    let mapInc = mkCmd "mapInc" (Ulist.map ((+) 1)) (ResizeCloneOps.cloneMap ((+) 1))
+    let even i = i % 2 = 0
+    let filterEvens = mkCmd "filterEvens" (Ulist.filter even) (fun  b -> b) //(ResizeCloneOps.cloneFilter even) 
+    
+    let mkSpec initial = 
+        { new ICommandGenerator<Ulist<int> list, List<int> list> with
+            member __.InitialActual = [(Ulist.ofSeq initial)] 
+            member __.InitialModel =
+                [(ResizeCloneOps.ofSeq initial)]
+            member __.Next m = Gen.elements [mapInc; filterEvens] }
+
 module ListTests =
     type ListAction<'v> = 
         | AddLast of 'v
@@ -13,22 +85,6 @@ module ListTests =
         | FilterWithFn
         | SetNthToNth of int * int
         | FoldAddingLast
-
-    let cloneAdd v (vs : ResizeArray<_>) =
-        seq {
-            for x in vs do yield x
-            yield v
-        } |> ResizeArray
-
-    let cloneMap f (vs : ResizeArray<_>) = Seq.map f vs |> ResizeArray
-
-    let cloneFilter f (vs : ResizeArray<_>) = Seq.filter f vs |> ResizeArray
-
-    let cloneSet (idx : int) (v : 'v) (vs : ResizeArray<_>) =
-        let vs2 = ResizeArray(vs.Capacity)
-        vs2.AddRange(vs)
-        vs2.[idx] <- v
-        vs2
 
     /// Keeps a reference to all persistent collections returned after
     /// performing actions, and after they are all applied, checks
@@ -53,18 +109,18 @@ module ListTests =
         let applyAction (list:'v ResizeArray) testlist action =
             match action with
             | ListAction.AddLast v ->
-                (cloneAdd v list, addLast v testlist)
+                (ResizeCloneOps.cloneAdd v list, addLast v testlist)
             | ListAction.MapIncrementFn ->
-                (cloneMap incrf list, mapf incrf testlist)
+                (ResizeCloneOps.cloneMap incrf list, mapf incrf testlist)
             | ListAction.FilterWithFn ->
-                (cloneFilter pred list, filter pred testlist)
+                (ResizeCloneOps.cloneFilter pred list, filter pred testlist)
             | ListAction.SetNthToNth(n1, n2) ->
                 let len = list.Count
                 if len > 0 then
                     let idx1, idx2 = n1 % len, n2 % len
                     let newlist = 
                         let v2 = Seq.item idx2 list
-                        cloneSet idx1 v2 list
+                        ResizeCloneOps.cloneSet idx1 v2 list
                     let test =
                         let v2 = getNth idx2 testlist
                         setNth idx1 v2 testlist
@@ -72,7 +128,7 @@ module ListTests =
                 else
                     (list, testlist)
             | ListAction.FoldAddingLast ->
-                let newlist = cloneAdd (Seq.fold folder (mkSeed()) list) list
+                let newlist = ResizeCloneOps.cloneAdd (Seq.fold folder (mkSeed()) list) list
                 let test = addLast (fold folder (mkSeed()) testlist) testlist
                 (newlist, test)
 
@@ -189,3 +245,10 @@ module ListTests =
 
         Prop.forAll actionGen (fun actions ->
             ulistEqLists initialList actions true)
+
+    [<Fact>]
+    let ff () =
+        let initialList = List()
+        let spec = ListCommands.mkSpec initialList
+        let prop = Command.toProperty spec
+        Check.One (Config.Verbose, prop)
