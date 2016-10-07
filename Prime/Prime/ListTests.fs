@@ -12,6 +12,7 @@ module ListTests =
         | MapIncrementFn
         | FilterWithFn
         | SetNthToNth of int * int
+        | FoldAddingLast
 
     let cloneAdd v (vs : ResizeArray<_>) =
         seq {
@@ -44,6 +45,9 @@ module ListTests =
         (pred: 'v->bool)
         (filter: ('v->bool)->'l->'l)
         (eq : 'l->'v ResizeArray->bool)
+        (mkSeed : unit->'v)
+        (fold : ('v->'v->'v)->'v->'l->'v)
+        (folder : 'v->'v->'v)
         (lookBackwards : bool) =
 
         let applyAction (list:'v ResizeArray) testlist action =
@@ -67,6 +71,10 @@ module ListTests =
                     (newlist, test)
                 else
                     (list, testlist)
+            | ListAction.FoldAddingLast ->
+                let newlist = cloneAdd (Seq.fold folder (mkSeed()) list) list
+                let test = addLast (fold folder (mkSeed()) testlist) testlist
+                (newlist, test)
 
         let (lists, testlists) =
             Array.fold
@@ -121,13 +129,13 @@ module ListTests =
             ary2.[i] <- v
             ary2
 
-        eqListsAfterSteps initialList ary actions add get set ((+) 1) Array.map pred Array.filter eq true
+        eqListsAfterSteps initialList ary actions add get set ((+) 1) Array.map pred Array.filter eq (fun () -> 0) Array.fold (+) true
 
     let ulistEqLists (initialList : ResizeArray<int>) (actions : ListAction<int>[]) (lookBackwards : bool) =
         let testList = Ulist.addMany initialList (Ulist.makeEmpty(None))
         let eq (ulist : Ulist<_>) (fslist : _ ResizeArray) = List.ofSeq ulist = List.ofSeq fslist
         let pred i = i % 2 = 0
-        eqListsAfterSteps initialList testList actions Ulist.add Ulist.get Ulist.set ((+) 1) Ulist.map pred Ulist.filter eq lookBackwards 
+        eqListsAfterSteps initialList testList actions Ulist.add Ulist.get Ulist.set ((+) 1) Ulist.map pred Ulist.filter eq (fun () -> 0) Ulist.fold (+) lookBackwards 
 
     [<Property>]
     let ulistEqList (initialList : ResizeArray<int>) (actions : ListAction<int>[]) =
